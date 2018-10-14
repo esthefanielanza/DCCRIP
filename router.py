@@ -1,6 +1,14 @@
 # coding=utf-8
-import select, socket, sys, json, threading, time
+import select, socket, sys, json, threading, time, struct
 
+def routeMessage(source, destinaton, typeT, payload):
+	outMessage = {
+		"source": source,
+		"destination": destination,
+		"type": typeT,
+		"payload":payload										
+	}
+	return json.dumps(outMessage)
 
 def routeMessage(source, destinaton, typeT):
 	outMessage = {
@@ -9,43 +17,64 @@ def routeMessage(source, destinaton, typeT):
 		"type": typeT											
 	}		
 
-def addEnlace(ip, weight, enlaces):
-	enlaces[ip] = weight
+def addEnlace(ip, weight, enlaces, addr):
+	# enlaces[toWhere][gateway]
+	if(not ip in enlaces):
+		enlaces[ip] = {}
+	enlaces[ip][addr] = weight
 	print('==== Enlaces ====')
 	print(enlaces)
 
-def delEnlace(ip, enlaces):
+def delEnlace(ip, enlaces, addr):
 	if(ip in enlaces):
-		del enlaces[ip]
-		print("Removed ip ", ip)		
-	
-def updateRoutes(period, enlaces):
+		if(addr in enlaces[ip]):
+			del enlaces[ip][addr]
+			print("Removed ip ", ip)		
+
+def getValidRoutes(enlaces, currentIp):
+	# Split Horizon
+	validRoutes = {}
+	for key, value in enlaces.items():
+		for gateway, value in enlaces[key].items():
+			if(key != currentIp and gateway != currentIp and (not key in validRoutes or value < validRoutes[key])):
+				validRoutes[key] = value
+	return validRoutes
+
+def receiveUpdate():
+	return 0		
+
+def sendUpdate(addr, period, enlaces, PORT, udp):
 	while(True):
 		time.sleep(period)
-		print('Updating')
+		# print('Updating')
 		for key, value in enlaces.items():
-			print(key)
-
-			# searching how to send a json
-			# updateMessage = {
-			# 	'type': 'update'
-			# 	'source': e
-			# }
+			validRoutes = getValidRoutes(enlaces, key)
+			updateMessage = {
+				'type': 'update',
+				'source': addr,
+				'destination': key,
+				'distances': validRoutes
+			}
+			print(validRoutes)
+			updateMessage = json.dumps(updateMessage)
+			udp.sendto(updateMessage.encode('latin1'), (key, PORT))
+			print('Sent update')
 
 def main(addr, period, startup):
 	udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	dest = (addr, 55151)
+	PORT = 55151
+	udp.bind((addr, PORT))
 	enlaces = {}
 	
-	updateThread = threading.Thread(target=updateRoutes, args=(period, enlaces))
-	updateThread.start()
+	sendUpdateThread = threading.Thread(target=sendUpdate, args=(addr, period, enlaces, PORT, udp))
+	sendUpdateThread.start()
 
 	while(True):
 		command = input().lower().split(' ')
 
 		if(command[0] == 'add'):
 			if(len(command) >= 3):
-				addEnlace(command[1], command[2], enlaces)
+				addEnlace(command[1], command[2], enlaces, addr)
 			else:
 				print('Invalid params, add should have an ip and weight.')
 		elif(command[0] == 'del'):
