@@ -25,11 +25,12 @@ def routeMessage(source, destinaton, typeT, payload):
 	}
 	return json.dumps(outMessage)
 
-def addEnlace(ip, weight, enlaces, addr):
+def addEnlace(ip, weight, enlaces, addr, lastUpdates):
 	# enlaces[toWhere][gateway]
 	if(not ip in enlaces):
 		enlaces[ip] = {}
 	enlaces[ip][addr] = weight
+	lastUpdates[ip] = time.time()
 	print('==== Enlaces ====')
 	print(enlaces)
 
@@ -65,12 +66,13 @@ def updateDistances(enlaces, ipRouter, smallestDistanceToUpdatedNode, newSmalles
 			if(gateway == ipRouter):
 				enlaces[ip][gateway] += newSmallestDistanceToUpdatedNode - smallestDistanceToUpdatedNode
 
-def receivedUpdate(message, enlaces):
+def receivedUpdate(message, enlaces, lastUpdates):
 	# Existe caminho para esse roteador? Se sim, posso adicionar os caminhos dele
 	#print('\n\n\n ======= RECEIVING ========')
 	## print(message)
 	#print('\n')
 	if(message['source'] in enlaces):
+		lastUpdates[message['source']] = time.time()
 		shortestDistanceToGateway = getShortestPath(enlaces, message['source'])
 		# Para todos os ips
 		for ip in list(enlaces):
@@ -93,17 +95,18 @@ def receivedUpdate(message, enlaces):
 		for ip in message['distances']:
 			if(not ip in enlaces):
 				enlaces[ip] = {}
+				lastUpdates[ip] = time.time()
 				enlaces[ip][message['source']] = int(message['distances'][ip]) + shortestDistanceToGateway
 		
 		print(enlaces)
 		print('\n')
 
-def receivedMessage(udp, enlaces):
+def receivedMessage(udp, enlaces, lastUpdates):
 	while(True):
 		data,address = udp.recvfrom(65536)
 		message = json.loads(data.decode('latin1'))
 		if(message['type'] == 'update'):
-			receivedUpdate(message, enlaces)
+			receivedUpdate(message, enlaces, lastUpdates)
 		elif(message['type'] == 'data'):
 			print('Data message')
 		elif(message['type'] == 'trace'):
@@ -135,24 +138,45 @@ def sendUpdate(addr, period, enlaces, PORT, udp):
 				updateMessage = json.dumps(updateMessage)
 				udp.sendto(updateMessage.encode('latin1'), (key, PORT))
 
+def removeUnusedEnlaces(enlaces, lastUpdates, period):
+	while(True):
+		currentTime = time.time()
+		removeIP = []
+		for ip in lastUpdates:
+			if(currentTime - lastUpdates[ip] >= 4*period):
+				removeIP.append(ip)
+
+		for ip in removeIP:
+			print('Deletei enlace', ip)
+			del enlaces[ip]
+			del lastUpdates[ip]
+
+		for ip in list(enlaces):
+			for gateway in list(enlaces[ip]):
+				if(gateway in removeIP):
+					delEnlace(ip, enlaces, gateway)
+					
 def main(addr, period, startup):
 	udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	PORT = 55151
 	udp.bind((addr, PORT))
 	enlaces = {}
-	
+	lastUpdates = {}
+
 	sendUpdateThread = threading.Thread(target=sendUpdate, args=(addr, period, enlaces, PORT, udp))
-	receiveMessageThread = threading.Thread(target=receivedMessage, args=(udp, enlaces))
+	receiveMessageThread = threading.Thread(target=receivedMessage, args=(udp, enlaces, lastUpdates))
+	removeUnusedEnlacesThread = threading.Thread(target=removeUnusedEnlaces, args=(enlaces, lastUpdates, period))
 
 	receiveMessageThread.start()
 	sendUpdateThread.start()
+	removeUnusedEnlacesThread.start()
 
 	while(True):
 		command = input().lower().split(' ')
 
 		if(command[0] == 'add'):
 			if(len(command) >= 3):
-				addEnlace(command[1], command[2], enlaces, addr)
+				addEnlace(command[1], command[2], enlaces, addr, lastUpdates)
 			else:
 				print('Invalid params, add should have an ip and weight.')
 		elif(command[0] == 'del'):
