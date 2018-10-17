@@ -52,13 +52,19 @@ def delEnlace(ip, enlaces, addr):
 def addRouteToTraceMessage(message, currentIp):
 	return 0		
 
-def getShortestPath(enlaces, ip):
+def getShortestPath(enlaces, ip, addr):
 	smallerDistance = sys.maxsize
+	gateway = ''
 	if(ip in enlaces):
 		for neighborhood in enlaces[ip]:
 			if int(enlaces[ip][neighborhood]) < smallerDistance:
 				smallerDistance = int(enlaces[ip][neighborhood])
-	return smallerDistance
+				if(neighborhood == addr):
+					gateway = ip
+				else:
+					gateway = neighborhood
+
+	return [smallerDistance, gateway]
 
 def updateDistances(enlaces, ipRouter, smallestDistanceToUpdatedNode, newSmallestDistanceToUpdatedNode):
 	for ip in enlaces:
@@ -66,26 +72,36 @@ def updateDistances(enlaces, ipRouter, smallestDistanceToUpdatedNode, newSmalles
 			if(gateway == ipRouter):
 				enlaces[ip][gateway] += newSmallestDistanceToUpdatedNode - smallestDistanceToUpdatedNode
 
-def receivedUpdate(message, enlaces, lastUpdates):
+def fowardMessage(message, ip, enlaces, udp, PORT, addr):
+	stringMessage = json.dumps(message)
+	print(enlaces)
+	nextPath = getShortestPath(enlaces, ip, addr)[1]
+	if(nextPath):
+		print('\nsending message to', nextPath)
+		print('destination', ip)
+		print('\n\n')
+		udp.sendto(stringMessage.encode('latin1'), (nextPath, PORT))
+
+def receivedUpdate(message, enlaces, lastUpdates, addr):
 	# Existe caminho para esse roteador? Se sim, posso adicionar os caminhos dele
 	#print('\n\n\n ======= RECEIVING ========')
 	## print(message)
 	#print('\n')
 	if(message['source'] in enlaces):
 		lastUpdates[message['source']] = time.time()
-		shortestDistanceToGateway = getShortestPath(enlaces, message['source'])
+		shortestDistanceToGateway = getShortestPath(enlaces, message['source'], addr)[0]
 		# Para todos os ips
 		for ip in list(enlaces):
 			# Calculamos a menor distancia para este ip
-			shortestDistanceToIp = getShortestPath(enlaces, ip)
+			shortestDistanceToIp = getShortestPath(enlaces, ip, addr)[0]
 			# Atualizamos ou deletamos se ele não estiver na mensagem
 			if(ip in message['distances']):
 				enlaces[ip][message['source']] = int(message['distances'][ip]) + shortestDistanceToGateway
 
 			if(message['source'] in list(enlaces[ip]) and not ip in message['distances']):
 				delEnlace(ip, enlaces, message['source'])
-
-			newShortestDistanceToIp = getShortestPath(enlaces, ip)
+			
+			newShortestDistanceToIp = getShortestPath(enlaces, ip, addr)[0]
 			# A menor distancia mudou? Se sim devemos atualizar todos os nós
 			if(not newShortestDistanceToIp == shortestDistanceToIp):
 				#print('Should update distances')
@@ -98,19 +114,38 @@ def receivedUpdate(message, enlaces, lastUpdates):
 				lastUpdates[ip] = time.time()
 				enlaces[ip][message['source']] = int(message['distances'][ip]) + shortestDistanceToGateway
 		
-		print(enlaces)
-		print('\n')
+		# print(enlaces)
+		# print('\n')
 
-def receivedMessage(udp, enlaces, lastUpdates):
+def receivedTrace(message, enlaces, addr, udp, PORT):
+	message['hops'].append(addr)
+	if(message['destination'] == addr):
+		dataMessage = { 
+			'type': 'data',
+			'source': message['destination'],
+			'destination': message['source'],
+			'payload': json.dumps(message)
+		}
+		fowardMessage(dataMessage, message['source'], enlaces, udp, PORT, addr)
+	else:
+		fowardMessage(message, message['destination'], enlaces, udp, PORT, addr)
+
+def receivedData(message, enlaces, addr, udp, PORT):
+	if(message['destination'] == addr):
+		print(message['payload'])
+	else:
+		fowardMessage(message, message['destination'], enlaces, udp, PORT, addr)
+
+def receivedMessage(enlaces, lastUpdates, addr, udp, PORT):
 	while(True):
 		data,address = udp.recvfrom(65536)
 		message = json.loads(data.decode('latin1'))
 		if(message['type'] == 'update'):
-			receivedUpdate(message, enlaces, lastUpdates)
+			receivedUpdate(message, enlaces, lastUpdates, addr)
 		elif(message['type'] == 'data'):
-			print('Data message')
+			receivedData(message, enlaces, addr, udp, PORT)
 		elif(message['type'] == 'trace'):
-			print("Trace message")						
+			receivedTrace(message, enlaces, addr, udp, PORT)				
 		else:
 			print("Tipo de mensagem desconhecido. Tente novamente")
 
@@ -156,6 +191,19 @@ def removeUnusedEnlaces(enlaces, lastUpdates, period):
 				if(gateway in removeIP):
 					delEnlace(ip, enlaces, gateway)
 					
+def sendTrace(destination, source, enlaces, udp, PORT):
+	if(destination in enlaces):
+		traceMessage = {
+			'type': 'trace',
+			'source': source,
+			'destination': destination,
+			'hops': [source]
+		}
+		print('sending traceMessage', traceMessage)
+		fowardMessage(traceMessage, destination, enlaces, udp, PORT, source)
+	else:
+		print('Não é possível alcançar o roteador', destination)
+
 def main(addr, period, startup):
 	udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	PORT = 55151
@@ -164,12 +212,13 @@ def main(addr, period, startup):
 	lastUpdates = {}
 
 	sendUpdateThread = threading.Thread(target=sendUpdate, args=(addr, period, enlaces, PORT, udp))
-	receiveMessageThread = threading.Thread(target=receivedMessage, args=(udp, enlaces, lastUpdates))
+	receiveMessageThread = threading.Thread(target=receivedMessage, args=(enlaces, lastUpdates, addr, udp, PORT))
 	removeUnusedEnlacesThread = threading.Thread(target=removeUnusedEnlaces, args=(enlaces, lastUpdates, period))
 
 	receiveMessageThread.start()
 	sendUpdateThread.start()
-	removeUnusedEnlacesThread.start()
+	# Fica mais fácil de testar removendo isso aqui, não esquecer de descomentar
+	# removeUnusedEnlacesThread.start()
 
 	while(True):
 		command = input().lower().split(' ')
@@ -185,7 +234,8 @@ def main(addr, period, startup):
 			else:
 				print('Invalid params, del should have an ip')
 		elif(command[0] == 'trace'):
-			print('Should thrace')
+			if(len(command) >= 2):
+				sendTrace(command[1], addr, enlaces, udp, PORT)
 		elif(command[0] == 'quit'):
 			exit(1)
 		else:
