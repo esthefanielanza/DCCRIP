@@ -69,8 +69,12 @@ def getShortestPath(enlaces, ip, addr):
 					gateway.append(ip)
 				else:
 					gateway.append(neighborhood)
+	
 	if(len(gateway) > 1):
 		gateway = selectRoute(gateway)
+	else:
+		gateway = gateway[0]
+	
 	return [smallerDistance, gateway]
 
 def updateDistances(enlaces, ipRouter, smallestDistanceToUpdatedNode, newSmallestDistanceToUpdatedNode):
