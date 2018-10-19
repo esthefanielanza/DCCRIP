@@ -1,5 +1,6 @@
 # coding=utf-8
 import select, socket, sys, json, threading, time, struct
+from random import randint
 
 # ip addr add 127.0.1.6/32 dev lo
 # add 127.0.1.4 10
@@ -15,6 +16,10 @@ import select, socket, sys, json, threading, time, struct
 # add 127.0.1.1 20
 # add 127.0.1.2 20
 # add 127.0.1.3 10
+
+def selectRoute(gateway):
+	return gateway[randint(0,len(gateway)-1)]
+
 
 def routeMessage(source, destinaton, typeT, payload):
 	outMessage = {
@@ -54,16 +59,18 @@ def addRouteToTraceMessage(message, currentIp):
 
 def getShortestPath(enlaces, ip, addr):
 	smallerDistance = sys.maxsize
-	gateway = ''
+	gateway = []
 	if(ip in enlaces):
 		for neighborhood in enlaces[ip]:
-			if int(enlaces[ip][neighborhood]) < smallerDistance:
+			if int(enlaces[ip][neighborhood]) <= smallerDistance:
+				if not smallerDistance == int(enlaces[ip][neighborhood]): gateway = []
 				smallerDistance = int(enlaces[ip][neighborhood])
 				if(neighborhood == addr):
-					gateway = ip
+					gateway.append(ip)
 				else:
-					gateway = neighborhood
-
+					gateway.append(neighborhood)
+	if(len(gateway) > 1):
+		gateway = selectRoute(gateway)
 	return [smallerDistance, gateway]
 
 def updateDistances(enlaces, ipRouter, smallestDistanceToUpdatedNode, newSmallestDistanceToUpdatedNode):
