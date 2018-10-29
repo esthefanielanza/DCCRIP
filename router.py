@@ -1,5 +1,5 @@
 # coding=utf-8
-import select, socket, sys, json, threading, time, struct
+import select, socket, sys, json, threading, time, struct, argparse
 from random import randint
 
 # ip addr add 127.0.1.6/32 dev lo
@@ -215,6 +215,40 @@ def sendTrace(destination, source, enlaces, udp, PORT):
 	else:
 		print('Não é possível alcançar o roteador', destination)
 
+def readStartupFile(startup, addr, enlaces, lastUpdates, udp, port):
+	file = open(startup, 'r')
+	line = file.readline()
+	while line:
+		splitedLine = line.split()
+
+		command = splitedLine[0]
+		ip = splitedLine[1]
+		weight = splitedLine[2]
+
+		runCommand(command, addr, enlaces, lastUpdates, udp, port, ip, weight)
+
+		line = file.readline()
+	file.close()
+
+def runCommand(command, addr, enlaces, lastUpdates, udp, port, ip, weight):
+	if(command == 'add'):
+		if(len(command) >= 3):
+			addEnlace(ip, weight, enlaces, addr, lastUpdates)
+		else:
+			print('Invalid params, add should have an ip and weight.')
+	elif(command == 'del'):
+		if(len(command) >= 2):
+			delEnlace(ip, enlaces, addr)
+		else:
+			print('Invalid params, del should have an ip')
+	elif(command == 'trace'):
+		if(len(command) >= 2):
+			sendTrace(ip, addr, enlaces, udp, PORT)
+	elif(command == 'quit'):
+		exit(1)
+	else:
+		print('Invalid command, please try again.')
+
 def main(addr, period, startup):
 	udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	PORT = 55151
@@ -229,28 +263,35 @@ def main(addr, period, startup):
 	receiveMessageThread.start()
 	sendUpdateThread.start()
 	# Fica mais fácil de testar removendo isso aqui, não esquecer de descomentar
-	# removeUnusedEnlacesThread.start()
+	removeUnusedEnlacesThread.start()
+
+	if startup != None: 
+		readStartupFile(startup, addr, enlaces, lastUpdates, udp, PORT)
 
 	while(True):
 		command = input().lower().split(' ')
-
-		if(command[0] == 'add'):
-			if(len(command) >= 3):
-				addEnlace(command[1], command[2], enlaces, addr, lastUpdates)
-			else:
-				print('Invalid params, add should have an ip and weight.')
-		elif(command[0] == 'del'):
-			if(len(command) >= 2):
-				delEnlace(command[1], enlaces, addr)
-			else:
-				print('Invalid params, del should have an ip')
-		elif(command[0] == 'trace'):
-			if(len(command) >= 2):
-				sendTrace(command[1], addr, enlaces, udp, PORT)
-		elif(command[0] == 'quit'):
-			exit(1)
-		else:
-			print('Invalid command, please try again.')
+		runCommand(command[0], addr, enlaces, lastUpdates, udp, PORT, command[1], command[2])
 
 if __name__ == "__main__":
-	main(sys.argv[1], int(sys.argv[2]), len(sys.argv) == 4 and sys.argv[3])
+	addr = None
+	update_period=None
+	startup_commands=None
+
+	if (len(sys.argv) <= 4):
+		addr = sys.argv[1]
+		update_period =  sys.argv[2]
+		if (len(sys.argv) == 4):
+			startup_commands =  sys.argv[3]
+	else:
+		parser = argparse.ArgumentParser()
+		parser.add_argument('--addr', action = 'store', help='Endereço de IP de associação', dest='addr', required=False, default=False)
+		parser.add_argument('--update-period', action = 'store', help='Periodo entre o envio das mensagens de update', dest='update_period', required=False, default=False)
+		parser.add_argument('--startup-commands', action = 'store', help='Arquivo com comandos de entrada', dest='startup_commands', required=False, default=False)
+
+		result = parser.parse_args()
+
+		addr = result.addr
+		update_period = result.update_period
+		startup_commands =  result.startup_commands
+
+	main(addr, float(update_period), startup_commands)
